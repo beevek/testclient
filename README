@@ -1,0 +1,114 @@
+----------------------------------------------------------------------
+Voxel test client
+
+Kris Beevers
+kbeevers@voxel.net
+
+March 2008 -- March 2009
+----------------------------------------------------------------------
+
+This software is useful for testing reverse proxy caching engines, 
+like transparent caching CDNs.
+
+Simulates traffic to by simultaneously downloading many files and
+attempting some semblance of realism in that it:
+
+  * occasionally makes byte range requests
+  * occasionally gets impatient and terminates a transfer
+  * sometimes throttles the connection to emulate a client on a
+    low-bandwidth connection
+
+The client can do some basic verification by comparing md5s of the
+completed transfers with precomputed md5s (if a whole file was
+transferred) or md5s computed from a local copy of the downloaded file
+(if only a range of bytes was transferred).
+
+Some simple status information is printed periodically, along with
+detailed information about failed transfers.
+
+The "setup" directory contains a couple configuration files and some 
+data files to serve as examples for performance and correctness 
+testing, where the local copy of the file repository is at 
+/tmp/apache-default.  You can use something like setup/makedb.sh to 
+set up your own local repository, or just use testclient without 
+correctness testing just to generate load.
+
+System requirements:
+
+  * libcurl 7.15.6 or higher
+  * set /proc/sys/net/ipv4/tcp_tw_recycle=1 (in /etc/sysctl.conf)
+
+Here is some usage information:
+
+  Usage: ./testclient [options] url-file
+  Options:
+    --help                   Print usage information
+    --config,-c              Specify configuration file
+    --save-config            Save configuration file
+  
+  Input:
+    --md5-list,-m            File with MD5 sums for each URL
+    --local-list,-l          File with local filenames for each URL
+    --server-list            File with server IPs and weights
+  
+  Output:
+    --quiet,-q               Quiet: log only status information, errors, and nothing else
+    --no-checks,-x           Don't do any consistency checking; dump content to /dev/null
+    --verbose,-v             Dump lots of debug output on request failure
+  
+  Traffic simulation:
+    --random,-r              Request URLs in random order (default)
+    --random-qstring-prob    Probability of adding a random query string parameter to the URL
+    --sequential,-s          Request URLs in sequential order
+    --br-prob,-b             Probability of making a byte range request (requires local-list)
+    --throttle-prob,-o       Probability of throttling connection speed for a request
+    --throttle-min,-i        Randomized throttling: minimum bytes/sec
+    --throttle-max,-a        Randomized throttling: maximum bytes/sec
+    --term-prob,-t           Probability of considering early termination for a request
+    --term-min-sec,-e        Seconds before we start considering early termination
+    --term-weibull-k,-k      Weibull PDF k parameter
+    --term-weibull-lambda,-d Weibull PDF lambda parameter
+    --repeat-prob,-p         Probability of the previous request being repeated immediately
+    --reuse-connections,-u   Keep connections open and reuse them for new requests
+    --num-transactions,-n    Number of simultaneous transactions to maintain
+
+And a few specifics:
+
+* if no md5 list is specified, full-file md5s will not be checked
+
+* if no local file list is specified, byte-range md5s will not be
+  checked
+
+* if a server list file is specified, it should have a line-based
+  format where each line contains an IP or hostname; optionally, after
+  a space, you can specify a numeric weight for the server.  requests
+  are round-robined over the servers according to their weights.
+
+* the probability of repeating the same request immediately should
+  usually be fairly low; this is mainly to test a particular case
+  (multiple requests for a file currently being brought into the cache
+  on the CDN)
+
+* the probability of making a byte range request should probably be
+  fairly low (e.g., 0.1 or less) unless you're specifically testing
+  this feature
+
+* throttling is limited to a single [min,max] range of Bps limiting
+  for now, so you probably don't want to make the probability of
+  throttling too high if the Bps range is low, unless you want to
+  simulate something like an army of 56K modems hitting the CDN
+
+* early termination is done by randomly selecting a wait time, greater
+  than a given minimum wait time, according to a Weibull distribution
+  with parameters k and lambda.  the client will wait min + X seconds,
+  where X ~ (k/lambda)*(x/lambda)^(k-1)*exp(-(x/lambda)^k).  see
+  http://en.wikipedia.org/wiki/Weibull_distribution for some sample
+  PDFs.  generally for this application we want k slightly > 1, and
+  fairly large lambda (e.g., 30).
+
+* if a byte-range request results in a file larger than the requested
+  range, and the file size is exactly equal to the size of the local
+  copy (and the md5 matches), we do not generate an error because it's
+  likely the CDN delivered the whole file and refused to service the
+  byte-range request.  this currently happens when the file is not in
+  cache and the CDN receives a byte-range request.
